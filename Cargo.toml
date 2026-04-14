@@ -2,6 +2,13 @@
 name = "ghostty-bridge"
 version = "0.1.0"
 edition = "2024"
+description = "CLI for AI agents to communicate across Ghostty terminal panes via AppleScript"
+license = "MIT"
+repository = "https://github.com/Joshua-Wright76/ghostty-bridge"
+authors = ["Joshua Wright"]
+readme = "README.md"
+keywords = ["ghostty", "terminal", "cli", "ai", "agent"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }

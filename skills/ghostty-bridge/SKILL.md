@@ -50,6 +50,8 @@ When you `message` another agent, their reply arrives directly in YOUR terminal 
 | `ghostty-bridge keys <target> <key>…` | Send special keys |
 | `ghostty-bridge message <target> <text>` | Type a framed bridge line and press Enter |
 | `ghostty-bridge reply <text>` | Read the current terminal, find the last bridge message, and message the sender back |
+| `ghostty-bridge layout validate <file>` | Validate a TOML layout template without opening anything |
+| `ghostty-bridge layout apply <file>` | Open a new tab in the front window and build the declared split tree |
 | `ghostty-bridge doctor` | Diagnose Ghostty connectivity |
 
 Targets can be a Ghostty UUID (e.g. `B7B29D1F-3720-48AC-ADA7-D507B260E1F0`) or any label previously set with `ghostty-bridge name`. Labels persist at `~/Library/Application Support/ghostty-bridge/labels.json` and survive session restarts.
@@ -99,6 +101,17 @@ ghostty-bridge read claude 80 --since-last-message
 
 This slices the visible transcript after the last recognized bridge-framed line. If there is no bridge message in the captured output, it returns the full read unchanged.
 
+### 4b. Grab only the peer's latest reply after you messaged them
+
+`reply --lines N` slices on **your own** terminal — it finds the last bridge line you received. To pull the last chunk from the peer's terminal (their reply block after the framing line they sent you), target that peer and use `--since-last-message`:
+
+```bash
+# You sent a message to codex, now pull only what codex emitted after the framing line.
+ghostty-bridge read codex 200 --since-last-message
+```
+
+Use this sparingly. If the peer is an agent, their reply should arrive in your terminal on its own — polling the peer is the anti-pattern the top of this file warns about. This path is for non-agent peers or for explicit forensic reads.
+
 ### 5. Type a command manually (verify before Enter)
 
 Use `type` + `keys Enter` when you want to see the text land before submitting. Follow **read → type → read → keys**:
@@ -128,6 +141,76 @@ ghostty-bridge read worker 20             # see the outcome
 ghostty-bridge keys build-server C-c                  # Ctrl-C
 ghostty-bridge keys worker Escape Enter               # dismiss + submit
 ```
+
+### 8. Open a pane layout from a TOML template
+
+`layout apply` opens a **new tab in the front Ghostty window** and builds the declared split tree. Each leaf pane is seeded by typing `cd ... && export ... && <command>` after the pane opens, so `cwd` is applied after creation (the root tab itself still starts in Ghostty's default directory).
+
+Put templates wherever you like; `~/.ghostty-bridge/` is a reasonable default. Validate first, then apply:
+
+```bash
+ghostty-bridge layout validate ~/.ghostty-bridge/ai-quad.toml
+ghostty-bridge layout apply    ~/.ghostty-bridge/ai-quad.toml
+```
+
+Template shape — each `split` has a `direction` and exactly two children (`left`+`right` for `right`/`left`, `top`+`bottom` for `down`/`up`). Leaves are `pane` nodes.
+
+Four-pane example (`ai-quad.toml`), top-left / top-right / bottom-left / bottom-right, all inheriting the current directory:
+
+```toml
+name = "ai-quad"
+
+[root]
+type = "split"
+direction = "down"        # split the tab top / bottom first
+
+[root.top]
+type = "split"
+direction = "right"       # then left / right inside the top half
+
+[root.top.left]
+type = "pane"
+label = "main"
+cwd = "."                 # "." or "$PWD" resolves to the cwd of `layout apply`
+command = "ccd"
+
+[root.top.right]
+type = "pane"
+label = "codex"
+cwd = "."
+command = "cxd"
+
+[root.bottom]
+type = "split"
+direction = "right"       # and left / right inside the bottom half
+
+[root.bottom.left]
+type = "pane"
+label = "yazi"
+cwd = "."
+command = "yazi"
+
+[root.bottom.right]
+type = "pane"
+label = "claude"
+cwd = "."
+command = "ccd"
+focus = true              # at most one pane may set focus = true
+```
+
+Pane fields: `label`, `cwd`, `command`, `input`, `env = ["KEY=VALUE"]`, `focus = true`.
+
+`cwd` accepts:
+- `"."` or `"$PWD"` — the directory you ran `layout apply` from
+- `"./sub"` or `"$PWD/sub"` — relative to that directory
+- `"~"`, `"~/path"` — home-expanded
+- absolute paths
+
+Gotchas:
+- Root tab starts in Ghostty's default directory; `cwd = "."` only takes effect after the first shell prompt, because it's applied via `cd` inside each pane.
+- `command` and `input` are mutually exclusive on a pane.
+- At most one pane in the whole tree may set `focus = true`.
+- Unknown fields (typos like `commnad = ...`) are rejected — validation will tell you which path failed.
 
 ## How `read` works (and why it costs the clipboard briefly)
 

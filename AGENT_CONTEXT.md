@@ -14,11 +14,13 @@ This file is the official agent handoff document and the source of truth for the
 ## Canonical References
 - Overall project state: this file
 - Domain-specific source of truth: this file
+- Future agent-messaging direction: `docs/hook-based-messaging.md`
 
 ## Architecture
 
 A Rust CLI (`ghostty-bridge`) that bridges AI agents to Ghostty terminal panes via AppleScript.
-Ghostty 1.3.0+ exposes an AppleScript API for window/tab/terminal control. `ghostty-bridge` wraps
+Ghostty 1.4.0+ exposes the AppleScript properties this project now relies on for terminal identity.
+`ghostty-bridge` wraps
 this API and adds a label system for friendly terminal naming.
 
 - `src/main.rs` — CLI entry point, clap arg parsing, command dispatch, target resolution
@@ -48,7 +50,7 @@ The binary is invoked as `ghostty-bridge`.
 | `ghostty-bridge close <target>` | Working | Closes a terminal, selected tab, or front window |
 | `ghostty-bridge name <target> <label>` | Working | Labels a terminal for easy reference |
 | `ghostty-bridge resolve <label>` | Working | Resolves a label to a terminal UUID |
-| `ghostty-bridge id` | Working | Identifies current terminal by matching cwd |
+| `ghostty-bridge id` | Working | Identifies current terminal via injected env var or Ghostty PID metadata |
 | `ghostty-bridge doctor` | Working | Diagnoses Ghostty connectivity |
 
 **Target resolution:**
@@ -66,9 +68,13 @@ The binary is invoked as `ghostty-bridge`.
 2. **AppleScript via stdin** — Scripts are piped to `osascript` via stdin rather than `-e` flag, because
    `-e` mode doesn't handle certain escape sequences. Field delimiter for structured output is `|||`.
 
-3. **Terminal identification** — `ghostty-bridge id` matches by `$TERM_PROGRAM == "ghostty"` + current working directory.
-   Ambiguous if multiple terminals share the same cwd. Prefer built-in selectors like `focused`, `selected-tab`,
-   and `front-window` when scripting; fall back to `id` only when you really need the calling terminal.
+3. **Terminal identification** — `ghostty-bridge id` resolves in two layers, first match wins: (a) the
+   `GHOSTTY_BRIDGE_TERMINAL_ID` environment variable, which `layout apply` and `open` inject into the pane's
+   bootstrap line so every descendant process (including nested agents, tmux, or Claude Code) inherits the
+   pane's identity; (b) the PID-ancestor chain walked against Ghostty's `pid` property (Ghostty 1.4+, PR
+   #11922). Every layer requires `$TERM_PROGRAM == "ghostty"`. The env layer is the most reliable and handles
+   nested tools and tmux; the PID layer is the only supported fallback for foreign panes. Ghostty versions older
+   than 1.4.0 are now out of support.
 
 4. **Label storage** — JSON file in `~/Library/Application Support/ghostty-bridge/labels.json`. Labels
    are ephemeral and not tied to Ghostty sessions.
@@ -83,16 +89,19 @@ The binary is invoked as `ghostty-bridge`.
    does not introduce a new AppleScript path; the existing single-terminal primitives are reused.
 
 7. **Layouts are TOML split trees applied from a new tab** — `layout apply` opens a new tab in Ghostty's front window,
-   then recursively builds the declared split tree. Leaf panes are configured by typing a synthesized shell command
-   (`cd`, `export`, then the requested command) so each pane can have independent cwd/env/command state. A layout may
-   mark at most one pane with `focus = true`.
+   then recursively builds the declared split tree. Leaf panes are configured by wrapping the synthesized setup in
+   `exec sh -c 'export GHOSTTY_BRIDGE_TERMINAL_ID=<uuid> [GHOSTTY_BRIDGE_LABEL=<label>] && [cd <cwd> &&] [export user env &&] exec <user command>'`.
+   Using `sh` keeps `export` working regardless of the user's login shell (fish/zsh/bash), and the `exec` chain
+   makes the user command the pane's top-level process. `open window|tab|split` uses the same pattern so that
+   manually opened panes also carry `GHOSTTY_BRIDGE_TERMINAL_ID`. A layout may mark at most one pane with
+   `focus = true`.
 
 8. **Agent messages use a parseable framing line** — `message` and `reply` emit
    `[ghostty-bridge:<sender> >>> <recipient>] <body>`. `reply` and `read --since-last-message` both parse the
    visible terminal transcript using that exact framing, so docs and automation should treat `src/main.rs` as canonical.
 
-9. **Structured terminal discovery is first-class** — `list --json` emits a stable array of `{ id, name, cwd, label }`
-   objects so scripts do not need to scrape the human-readable table output.
+9. **Structured terminal discovery is first-class** — `list --json` emits a stable array of `{ id, name, cwd, pid, tty, label }`
+   objects so scripts do not need to scrape the human-readable table output. `pid` and `tty` come from Ghostty 1.4+.
 
 ## Open Questions / Known Gaps
 
@@ -101,8 +110,13 @@ The binary is invoked as `ghostty-bridge`.
   without Ghostty exposing buffer semantics (OSC 133 markers are internal only).
 - **`perform action "write_screen_file"`** returns false via AppleScript — may need a Ghostty fix or
   different action string format. If this worked, it would be a cleaner read path than clipboard.
-- **Terminal identification is fragile** — matching by cwd alone can be ambiguous. Built-in selectors mitigate
-  this for most workflows, but `ghostty-bridge id` still needs improvement (tty matching or a Ghostty env var).
+- **Terminal identification is reliable in panes seeded by this tool** — `GHOSTTY_BRIDGE_TERMINAL_ID` makes
+  identity deterministic for every process descending from a pane opened by `layout apply` or `open`. For
+  foreign panes (manually opened, or started before the tool existed) we now only rely on the Ghostty 1.4+
+  `pid` property. There is no longer any `tty` or cwd fallback.
+- **Transcript-based messaging remains the weak point** — `reply` and `read --since-last-message` still parse
+  visible terminal text captured through the clipboard path. Do not extend that path with more fallbacks or new
+  e2e coverage. The intended replacement is a plugin hook flow documented in `docs/hook-based-messaging.md`.
 - **No Linux support** — Ghostty AppleScript is macOS only. Linux would need a different IPC mechanism.
 - **No shell setup command yet** — planned `ghostty-bridge shell-setup` to emit shell helper functions.
 - **`find_terminal_index` runs a full AppleScript list on every targeted call** — sequential commands are chatty.

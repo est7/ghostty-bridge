@@ -40,8 +40,10 @@ Keep new work inside those boundaries unless the feature truly needs a new modul
 - Built-in selectors `focused`, `selected-tab`, and `front-window` are preferred over cwd-based `id` detection when a command can target active Ghostty context directly.
 - AppleScript is always piped to `osascript` through stdin. Do not switch these scripts to `osascript -e`; the repository context documents escaping problems with that approach.
 - `read` is clipboard-based: it saves the current clipboard, triggers Ghostty `select_all` and `copy_to_clipboard`, reads via `pbpaste`, then restores the clipboard. Any change here needs to preserve clipboard restoration behavior.
-- `id` detection is heuristic. It requires `TERM_PROGRAM=ghostty` and currently matches terminals by working directory, with stubbed placeholders for stronger TTY-based matching. Be careful when changing terminal-identification logic.
+- `id` detection is layered (first match wins): (1) `GHOSTTY_BRIDGE_TERMINAL_ID` env, which `layout apply` and `open` inject into the pane's bootstrap line so every descendant process inherits its pane identity; (2) PID-ancestor match against Ghostty's `pid` property (Ghostty 1.4+). Requires `TERM_PROGRAM=ghostty` at every layer. Ghostty versions older than 1.4.0 are out of support.
+- `layout apply` and `open` wrap the user command in `exec sh -c 'export GHOSTTY_BRIDGE_TERMINAL_ID=<uuid> [GHOSTTY_BRIDGE_LABEL=<label>] && [cd <cwd> &&] exec <user-cmd>'`. `sh` is used (not the user's login shell) so `export` keeps its POSIX meaning even when the user runs fish; `exec` chains keep the AI process as the pane's top-level PID.
 - Layout templates live in TOML files and are applied by recursively opening splits from a fresh Ghostty window, then typing synthesized shell setup into each leaf pane.
+- Do not add new automation or tests on top of `reply` / `read --since-last-message` transcript parsing. Future agent routing should move to plugin hooks; see `docs/hook-based-messaging.md`.
 
 ## Development notes that matter
 

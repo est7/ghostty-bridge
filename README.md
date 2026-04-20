@@ -5,7 +5,7 @@ A CLI that bridges AI agents to Ghostty terminal panes via AppleScript. Send tex
 ## Requirements
 
 - macOS (uses AppleScript for Ghostty automation)
-- [Ghostty](https://ghostty.org) 1.3.0+ with AppleScript support
+- [Ghostty](https://ghostty.org) 1.4.0+ with AppleScript support (`pid` discovery is required)
 
 ## Install
 
@@ -109,7 +109,7 @@ ghostty-bridge reply "I checked it; auth.ts:142 needs a nil guard"
 [ghostty-bridge:CLAUDE-UUID >>> codex] Please review src/auth.ts
 ```
 
-`reply` reads the current terminal, finds the most recent bridge-framed line, resolves the sender through the existing label-or-UUID pipeline, and sends the response there.
+`reply` reads the current terminal, finds the most recent bridge-framed line, resolves the sender through the existing label-or-UUID pipeline, and sends the response there. This is still transcript-based and best-effort; do not build new agent automation on top of it.
 
 ### Read only the output after the last agent message
 
@@ -226,11 +226,13 @@ Agent-to-agent messages use a parseable framing line:
 `[ghostty-bridge:<sender> >>> <recipient>] <body>`.
 `reply` and `read --since-last-message` both operate by parsing that visible transcript format.
 
+For robust Claude Code / Codex agent routing, prefer a hook-driven plugin flow instead of transcript parsing. The migration plan lives in `docs/hook-based-messaging.md`.
+
 The `read` command works by using `select_all` + `copy_to_clipboard` via AppleScript, reading the clipboard via `pbpaste`, then restoring the original clipboard. There is a brief window (~100ms) where the clipboard is in use.
 
 ## Diagnostics
 
-Run `ghostty-bridge doctor` to verify that Ghostty is running, check the version, count terminals, and test terminal identification.
+Run `ghostty-bridge doctor` to verify that Ghostty is running, check the version, count terminals, and test terminal identification. `doctor` fails on Ghostty versions older than 1.4.0.
 
 ## License
 

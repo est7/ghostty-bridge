@@ -1,10 +1,14 @@
 use std::process::Command;
 
+pub const MINIMUM_GHOSTTY_VERSION: &str = "1.4.0";
+
 #[derive(Debug, Clone)]
 pub struct TerminalInfo {
     pub id: String,
     pub name: String,
     pub cwd: String,
+    pub pid: Option<u32>,
+    pub tty: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -118,6 +122,31 @@ pub fn get_version() -> Option<String> {
     osascript("tell application \"Ghostty\" to get version").ok()
 }
 
+pub fn supports_minimum_version(version: &str) -> bool {
+    parse_version_prefix(version)
+        .map(|(major, minor)| (major, minor) >= (1, 4))
+        .unwrap_or(false)
+}
+
+fn parse_version_prefix(version: &str) -> Option<(u64, u64)> {
+    let mut parts = version.split('.');
+    let major = parse_version_component(parts.next()?)?;
+    let minor = parse_version_component(parts.next()?)?;
+    Some((major, minor))
+}
+
+fn parse_version_component(component: &str) -> Option<u64> {
+    let digits = component
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect::<String>();
+    if digits.is_empty() {
+        None
+    } else {
+        digits.parse().ok()
+    }
+}
+
 pub fn list_terminals() -> Vec<TerminalInfo> {
     let script = r#"
 tell application "Ghostty"
@@ -129,7 +158,15 @@ tell application "Ghostty"
         set tid to id of t
         set tn to name of t
         set twd to working directory of t
-        set output to output & tid & "|||" & tn & "|||" & twd & linefeed
+        set tpid to ""
+        set ttty to ""
+        try
+            set tpid to (pid of t) as text
+        end try
+        try
+            set ttty to tty of t
+        end try
+        set output to output & tid & "|||" & tn & "|||" & twd & "|||" & tpid & "|||" & ttty & linefeed
     end repeat
     return output
 end tell
@@ -143,10 +180,27 @@ end tell
     for line in raw.lines() {
         let parts: Vec<&str> = line.split("|||").collect();
         if parts.len() >= 3 {
+            let pid = parts.get(3).and_then(|s| {
+                if s.is_empty() {
+                    None
+                } else {
+                    s.parse::<u32>().ok()
+                }
+            });
+            let tty = parts.get(4).and_then(|s| {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            });
             terminals.push(TerminalInfo {
                 id: parts[0].to_string(),
                 name: parts[1].to_string(),
                 cwd: parts[2].to_string(),
+                pid,
+                tty,
             });
         }
     }
@@ -284,30 +338,18 @@ pub fn find_current_terminal_id() -> Option<String> {
         return None;
     }
 
-    let cwd = std::env::current_dir().ok()?;
-    let cwd_str = cwd.to_str()?;
-
-    let terminals = list_terminals();
-
-    let matches: Vec<&TerminalInfo> = terminals.iter().filter(|t| t.cwd == cwd_str).collect();
-
-    if matches.len() == 1 {
-        return Some(matches[0].id.clone());
+    if let Ok(id) = std::env::var("GHOSTTY_BRIDGE_TERMINAL_ID")
+        && !id.is_empty()
+    {
+        return Some(id);
     }
 
-    if !matches.is_empty() {
-        if let Some(tty) = current_tty() {
-            for t in &matches {
-                if let Some(child_tty) = get_terminal_tty_for_cwd(&t.cwd)
-                    && tty == child_tty
-                {
-                    return Some(t.id.clone());
-                }
-            }
-        }
+    let terminals = list_terminals();
+    let ancestors = ancestor_pids();
 
-        if let Some(_shell_pid) = find_shell_pid_for_cwd(cwd_str) {
-            return Some(matches[0].id.clone());
+    for pid in &ancestors {
+        if let Some(t) = terminals.iter().find(|t| t.pid == Some(*pid)) {
+            return Some(t.id.clone());
         }
     }
 
@@ -490,19 +532,49 @@ end tell
     osascript(script).is_ok()
 }
 
-fn current_tty() -> Option<String> {
-    let output = Command::new("tty").output().ok()?;
-    if output.status.success() {
-        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
-    } else {
-        None
+fn ancestor_pids() -> Vec<u32> {
+    let mut out = Vec::new();
+    let mut pid = std::process::id();
+    for _ in 0..32 {
+        out.push(pid);
+        match parent_pid(pid) {
+            Some(parent) if parent != 0 && parent != 1 && parent != pid => pid = parent,
+            _ => break,
+        }
     }
+    out
 }
 
-fn get_terminal_tty_for_cwd(_cwd: &str) -> Option<String> {
-    None
+fn parent_pid(pid: u32) -> Option<u32> {
+    let output = Command::new("ps")
+        .args(["-o", "ppid=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse::<u32>()
+        .ok()
 }
 
-fn find_shell_pid_for_cwd(_cwd: &str) -> Option<u32> {
-    None
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_supported_version_prefixes() {
+        assert!(supports_minimum_version("1.4.0"));
+        assert!(supports_minimum_version("1.4.2-dev"));
+        assert!(supports_minimum_version("1.5"));
+        assert!(supports_minimum_version("2.0.0"));
+    }
+
+    #[test]
+    fn rejects_unsupported_or_invalid_versions() {
+        assert!(!supports_minimum_version("1.3.9"));
+        assert!(!supports_minimum_version("0.9.0"));
+        assert!(!supports_minimum_version("dev-build"));
+    }
 }

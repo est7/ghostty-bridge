@@ -254,12 +254,30 @@ fn parse_target(target: &str) -> ParsedTarget {
 }
 
 fn resolve_label_or_uuid(target: &str) -> String {
-    let lowered = target.to_lowercase();
-    let looks_like_uuid = lowered.contains('-') && lowered.len() >= 20;
-    if !looks_like_uuid && let Some(id) = labels::resolve(target) {
+    if !looks_like_uuid(target)
+        && let Some(id) = labels::resolve(target)
+    {
         return id;
     }
     target.to_string()
+}
+
+fn looks_like_uuid(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    if bytes.len() != 36 {
+        return false;
+    }
+    for (i, b) in bytes.iter().enumerate() {
+        let expect_hyphen = matches!(i, 8 | 13 | 18 | 23);
+        if expect_hyphen {
+            if *b != b'-' {
+                return false;
+            }
+        } else if !b.is_ascii_hexdigit() {
+            return false;
+        }
+    }
+    true
 }
 
 fn resolve_terminal_target(target: &str) -> Result<String, String> {
@@ -526,7 +544,7 @@ fn apply_layout_pane(
         labels::set(label, terminal_id);
     }
 
-    if let Some(command) = build_layout_shell_command(pane)? {
+    if let Some(command) = build_layout_shell_command(pane, terminal_id)? {
         if !applescript::input_text(terminal_id, &command) {
             return Err(format!(
                 "Failed to type layout command into terminal {}",
@@ -554,12 +572,24 @@ fn apply_layout_pane(
     Ok(())
 }
 
-fn build_layout_shell_command(pane: &LayoutPane) -> Result<Option<String>, String> {
-    let mut parts = Vec::new();
+fn build_layout_shell_command(
+    pane: &LayoutPane,
+    terminal_id: &str,
+) -> Result<Option<String>, String> {
+    let mut inner_parts = Vec::new();
+
+    let mut bridge_exports = vec![format!(
+        "GHOSTTY_BRIDGE_TERMINAL_ID={}",
+        shell_quote(terminal_id)
+    )];
+    if let Some(label) = &pane.label {
+        bridge_exports.push(format!("GHOSTTY_BRIDGE_LABEL={}", shell_quote(label)));
+    }
+    inner_parts.push(format!("export {}", bridge_exports.join(" ")));
 
     if let Some(cwd) = &pane.cwd {
         let cwd = resolve_cwd(cwd)?;
-        parts.push(format!("cd {}", shell_quote(&cwd)));
+        inner_parts.push(format!("cd {}", shell_quote(&cwd)));
     }
 
     if !pane.env.is_empty() {
@@ -572,18 +602,15 @@ fn build_layout_shell_command(pane: &LayoutPane) -> Result<Option<String>, Strin
             .map(|(key, value)| format!("{}={}", key, shell_quote(&value)))
             .collect::<Vec<_>>()
             .join(" ");
-        parts.push(format!("export {}", exports));
+        inner_parts.push(format!("export {}", exports));
     }
 
     if let Some(command) = &pane.command {
-        parts.push(command.clone());
+        inner_parts.push(format!("exec {}", command));
     }
 
-    if parts.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(parts.join(" && ")))
-    }
+    let script = inner_parts.join(" && ");
+    Ok(Some(format!("exec sh -c {}", shell_quote(&script))))
 }
 
 fn validate_env_assignment(entry: &str) -> Result<(), String> {
@@ -773,6 +800,8 @@ struct ListEntry<'a> {
     id: &'a str,
     name: &'a str,
     cwd: &'a str,
+    pid: Option<u32>,
+    tty: Option<&'a str>,
     label: Option<&'a str>,
 }
 
@@ -786,6 +815,8 @@ fn build_list_entries<'a>(
             id: &t.id,
             name: &t.name,
             cwd: &t.cwd,
+            pid: t.pid,
+            tty: t.tty.as_deref(),
             label: labels
                 .iter()
                 .find(|(_, id)| *id == &t.id)
@@ -812,11 +843,13 @@ fn main() {
             } else {
                 for entry in entries {
                     let label = entry.label.unwrap_or("-");
+                    let tty = entry.tty.unwrap_or("-");
                     println!(
-                        "{:<38} {:<30} {:<40} {}",
+                        "{:<38} {:<30} {:<40} {:<14} {}",
                         entry.id,
                         truncate(entry.name, 30),
                         entry.cwd,
+                        tty,
                         label
                     );
                 }
@@ -915,7 +948,10 @@ fn main() {
             Some(id) => println!("{}", id),
             None => {
                 eprintln!("Could not identify current Ghostty terminal");
-                eprintln!("Hint: ensure you are running inside a Ghostty terminal");
+                eprintln!(
+                    "Hint: ensure you are running inside a Ghostty {}+ terminal",
+                    applescript::MINIMUM_GHOSTTY_VERSION
+                );
                 process::exit(1);
             }
         },
@@ -939,8 +975,19 @@ fn main() {
             let version = applescript::get_version();
             println!(
                 "Ghostty version:    {}",
-                version.unwrap_or_else(|| "unknown".into())
+                version.as_deref().unwrap_or("unknown")
             );
+
+            if let Some(version) = version.as_deref()
+                && !applescript::supports_minimum_version(version)
+            {
+                println!("---");
+                println!(
+                    "Status: FAIL - ghostty-bridge requires Ghostty {}+ for pid-based terminal discovery",
+                    applescript::MINIMUM_GHOSTTY_VERSION
+                );
+                process::exit(1);
+            }
 
             let terminals = applescript::list_terminals();
             println!("Total terminals:    {}", terminals.len());
@@ -974,9 +1021,10 @@ fn main() {
                 let _: () = exit_with_error("--target is only valid for 'open split'");
             }
 
+            let user_command = args.command.clone();
             let config = applescript::SurfaceConfig {
                 cwd: args.cwd,
-                command: args.command,
+                command: None,
                 input: args.input,
                 wait_after_command: args.wait,
                 env: args.env,
@@ -998,9 +1046,28 @@ fn main() {
             }
             .unwrap_or_else(exit_with_error);
 
-            if let Some(label) = args.label {
-                labels::set(&label, &id);
+            if let Some(label) = &args.label {
+                labels::set(label, &id);
             }
+
+            let mut exports = vec![format!("GHOSTTY_BRIDGE_TERMINAL_ID={}", shell_quote(&id))];
+            if let Some(label) = &args.label {
+                exports.push(format!("GHOSTTY_BRIDGE_LABEL={}", shell_quote(label)));
+            }
+            let mut inner = vec![format!("export {}", exports.join(" "))];
+            if let Some(cmd) = user_command {
+                inner.push(format!("exec {}", cmd));
+            }
+            let script = inner.join(" && ");
+            let line = format!("exec sh -c {}", shell_quote(&script));
+            ensure_ok(
+                applescript::input_text(&id, &line),
+                format!("Failed to type bootstrap into terminal {}", id),
+            );
+            ensure_ok(
+                applescript::send_key(&id, "enter"),
+                format!("Failed to send Enter to terminal {}", id),
+            );
 
             println!("{}", id);
         }
@@ -1211,11 +1278,15 @@ done
                 id: "ID-1".to_string(),
                 name: "claude".to_string(),
                 cwd: "/a".to_string(),
+                pid: Some(1234),
+                tty: Some("/dev/ttys001".to_string()),
             },
             applescript::TerminalInfo {
                 id: "ID-2".to_string(),
                 name: "codex".to_string(),
                 cwd: "/b".to_string(),
+                pid: None,
+                tty: None,
             },
         ];
         let mut labels: HashMap<String, String> = HashMap::new();
@@ -1225,8 +1296,12 @@ done
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].id, "ID-1");
         assert_eq!(entries[0].label, Some("claude"));
+        assert_eq!(entries[0].pid, Some(1234));
+        assert_eq!(entries[0].tty, Some("/dev/ttys001"));
         assert_eq!(entries[1].id, "ID-2");
         assert_eq!(entries[1].label, None);
+        assert_eq!(entries[1].pid, None);
+        assert_eq!(entries[1].tty, None);
     }
 
     #[test]
@@ -1235,6 +1310,8 @@ done
             id: "ID-1".to_string(),
             name: "claude".to_string(),
             cwd: "/a".to_string(),
+            pid: Some(42),
+            tty: Some("/dev/ttys009".to_string()),
         }];
         let mut labels: HashMap<String, String> = HashMap::new();
         labels.insert("claude".to_string(), "ID-1".to_string());
@@ -1247,6 +1324,15 @@ done
         assert_eq!(arr[0]["id"], "ID-1");
         assert_eq!(arr[0]["name"], "claude");
         assert_eq!(arr[0]["cwd"], "/a");
+        assert_eq!(arr[0]["pid"], 42);
+        assert_eq!(arr[0]["tty"], "/dev/ttys009");
         assert_eq!(arr[0]["label"], "claude");
+    }
+
+    #[test]
+    fn looks_like_uuid_requires_canonical_shape() {
+        assert!(looks_like_uuid("123e4567-e89b-12d3-a456-426614174000"));
+        assert!(!looks_like_uuid("codex-e2e-1740000000000"));
+        assert!(!looks_like_uuid("123e4567e89b12d3a456426614174000"));
     }
 }

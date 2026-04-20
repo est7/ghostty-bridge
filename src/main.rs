@@ -978,18 +978,26 @@ fn main() {
                 version.as_deref().unwrap_or("unknown")
             );
 
-            if let Some(version) = version.as_deref()
-                && !applescript::supports_minimum_version(version)
-            {
+            let terminals = applescript::list_terminals();
+            let pid_metadata = applescript::supports_pid_metadata(&terminals);
+            println!(
+                "PID metadata:       {}",
+                if pid_metadata { "yes" } else { "no" }
+            );
+
+            if !applescript::supports_identity_detection(version.as_deref(), &terminals) {
                 println!("---");
                 println!(
-                    "Status: FAIL - ghostty-bridge requires Ghostty {}+ for pid-based terminal discovery",
+                    "Status: FAIL - ghostty-bridge requires Ghostty {}+ or a build exposing Ghostty pid metadata",
                     applescript::MINIMUM_GHOSTTY_VERSION
                 );
                 process::exit(1);
             }
 
-            let terminals = applescript::list_terminals();
+            if applescript::version_requires_capability_fallback(version.as_deref(), &terminals) {
+                println!("Version gate:       fallback via pid metadata");
+            }
+
             println!("Total terminals:    {}", terminals.len());
 
             let store = labels::load();
@@ -1334,5 +1342,12 @@ done
         assert!(looks_like_uuid("123e4567-e89b-12d3-a456-426614174000"));
         assert!(!looks_like_uuid("codex-e2e-1740000000000"));
         assert!(!looks_like_uuid("123e4567e89b12d3a456426614174000"));
+    }
+
+    #[test]
+    fn bundled_layout_template_validates() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("layouts/ai-trio.toml");
+        let layout = load_layout(&path).expect("layout should parse");
+        validate_layout(&layout).expect("layout should validate");
     }
 }

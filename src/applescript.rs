@@ -1,6 +1,9 @@
 use std::process::Command;
+use std::thread;
+use std::time::{Duration, Instant};
 
 pub const MINIMUM_GHOSTTY_VERSION: &str = "1.4.0";
+const OSASCRIPT_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone)]
 pub struct TerminalInfo {
@@ -40,25 +43,101 @@ impl SplitDirection {
 }
 
 fn osascript(script: &str) -> Result<String, String> {
-    let output = Command::new("osascript")
+    let mut child = Command::new("osascript")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .and_then(|mut child| {
-            use std::io::Write;
-            if let Some(stdin) = child.stdin.as_mut() {
-                stdin.write_all(script.as_bytes())?;
-            }
-            child.wait_with_output()
-        })
         .map_err(|e| format!("Failed to run osascript: {}", e))?;
 
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    {
+        use std::io::Write;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "Failed to open osascript stdin".to_string())?;
+        stdin
+            .write_all(script.as_bytes())
+            .map_err(|e| format!("Failed to write osascript stdin: {}", e))?;
+    }
+
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let mut stdout = String::new();
+                let mut stderr = String::new();
+
+                if let Some(mut out) = child.stdout.take() {
+                    use std::io::Read;
+                    let _ = out.read_to_string(&mut stdout);
+                }
+                if let Some(mut err) = child.stderr.take() {
+                    use std::io::Read;
+                    let _ = err.read_to_string(&mut stderr);
+                }
+
+                if status.success() {
+                    return Ok(stdout.trim().to_string());
+                }
+                return Err(stderr.trim().to_string());
+            }
+            Ok(None) if start.elapsed() < OSASCRIPT_TIMEOUT => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "osascript timed out after {}s",
+                    OSASCRIPT_TIMEOUT.as_secs()
+                ));
+            }
+            Err(e) => return Err(format!("Failed to wait for osascript: {}", e)),
+        }
+    }
+}
+
+pub fn supports_minimum_version(version: &str) -> bool {
+    parse_version_prefix(version)
+        .map(|(major, minor)| (major, minor) >= (1, 4))
+        .unwrap_or(false)
+}
+
+pub fn supports_pid_metadata(terminals: &[TerminalInfo]) -> bool {
+    terminals.iter().any(|terminal| terminal.pid.is_some())
+}
+
+pub fn supports_identity_detection(version: Option<&str>, terminals: &[TerminalInfo]) -> bool {
+    version.is_some_and(supports_minimum_version) || supports_pid_metadata(terminals)
+}
+
+pub fn version_requires_capability_fallback(
+    version: Option<&str>,
+    terminals: &[TerminalInfo],
+) -> bool {
+    match version {
+        Some(version) => !supports_minimum_version(version) && supports_pid_metadata(terminals),
+        None => supports_pid_metadata(terminals),
+    }
+}
+
+fn parse_version_prefix(version: &str) -> Option<(u64, u64)> {
+    let mut parts = version.split('.');
+    let major = parse_version_component(parts.next()?)?;
+    let minor = parse_version_component(parts.next()?)?;
+    Some((major, minor))
+}
+
+fn parse_version_component(component: &str) -> Option<u64> {
+    let digits = component
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect::<String>();
+    if digits.is_empty() {
+        None
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        Err(stderr)
+        digits.parse().ok()
     }
 }
 
@@ -120,31 +199,6 @@ pub fn is_ghostty_running() -> bool {
 
 pub fn get_version() -> Option<String> {
     osascript("tell application \"Ghostty\" to get version").ok()
-}
-
-pub fn supports_minimum_version(version: &str) -> bool {
-    parse_version_prefix(version)
-        .map(|(major, minor)| (major, minor) >= (1, 4))
-        .unwrap_or(false)
-}
-
-fn parse_version_prefix(version: &str) -> Option<(u64, u64)> {
-    let mut parts = version.split('.');
-    let major = parse_version_component(parts.next()?)?;
-    let minor = parse_version_component(parts.next()?)?;
-    Some((major, minor))
-}
-
-fn parse_version_component(component: &str) -> Option<u64> {
-    let digits = component
-        .chars()
-        .take_while(|ch| ch.is_ascii_digit())
-        .collect::<String>();
-    if digits.is_empty() {
-        None
-    } else {
-        digits.parse().ok()
-    }
 }
 
 pub fn list_terminals() -> Vec<TerminalInfo> {
@@ -576,5 +630,23 @@ mod tests {
         assert!(!supports_minimum_version("1.3.9"));
         assert!(!supports_minimum_version("0.9.0"));
         assert!(!supports_minimum_version("dev-build"));
+    }
+
+    #[test]
+    fn pid_metadata_can_satisfy_identity_detection() {
+        let terminals = vec![TerminalInfo {
+            id: "ID-1".to_string(),
+            name: "term".to_string(),
+            cwd: "/tmp".to_string(),
+            pid: Some(42),
+            tty: Some("/dev/ttys001".to_string()),
+        }];
+
+        assert!(supports_identity_detection(Some("afdae7293"), &terminals));
+        assert!(version_requires_capability_fallback(
+            Some("afdae7293"),
+            &terminals
+        ));
+        assert!(supports_identity_detection(None, &terminals));
     }
 }

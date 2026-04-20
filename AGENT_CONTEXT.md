@@ -75,6 +75,8 @@ The binary is invoked as `ghostty-bridge`.
    #11922). Every layer requires `$TERM_PROGRAM == "ghostty"`. The env layer is the most reliable and handles
    nested tools and tmux; the PID layer is the only supported fallback for foreign panes. Ghostty versions older
    than 1.4.0 are now out of support.
+   `doctor` accepts dev builds whose version string is not semantic if the AppleScript terminal list already
+   exposes `pid` metadata.
 
 4. **Label storage** — JSON file in `~/Library/Application Support/ghostty-bridge/labels.json`. Labels
    are ephemeral and not tied to Ghostty sessions.

@@ -232,7 +232,7 @@ The `read` command works by using `select_all` + `copy_to_clipboard` via AppleSc
 
 ## Diagnostics
 
-Run `ghostty-bridge doctor` to verify that Ghostty is running, check the version, count terminals, and test terminal identification. `doctor` fails on Ghostty versions older than 1.4.0.
+Run `ghostty-bridge doctor` to verify that Ghostty is running, check the version, count terminals, and test terminal identification. `doctor` accepts either Ghostty 1.4.0+ or a dev build that already exposes `pid` metadata in the AppleScript terminal list.
 
 ## License
 

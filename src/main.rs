@@ -31,6 +31,7 @@ Template shape:
   focus = true
 
 Each pane may set: label, cwd, command, input, env = ["KEY=VALUE"], focus = true.
+Use cwd = "." or cwd = "$PWD" to reuse the current working directory.
 A layout may mark at most one pane with focus = true."#;
 
 #[derive(Parser)]
@@ -478,7 +479,7 @@ fn empty_surface_config() -> applescript::SurfaceConfig {
 fn apply_layout(layout: &LayoutFile) -> Result<String, String> {
     validate_layout(layout)?;
 
-    let root_id = applescript::open_window(&empty_surface_config())?;
+    let root_id = applescript::open_tab(&empty_surface_config())?;
     let mut focus_target = None;
     build_layout_node(&layout.root, &root_id, &mut focus_target)?;
 
@@ -557,7 +558,7 @@ fn build_layout_shell_command(pane: &LayoutPane) -> Result<Option<String>, Strin
     let mut parts = Vec::new();
 
     if let Some(cwd) = &pane.cwd {
-        let cwd = expand_home(cwd);
+        let cwd = resolve_cwd(cwd)?;
         parts.push(format!("cd {}", shell_quote(&cwd)));
     }
 
@@ -627,6 +628,32 @@ fn expand_home(path: &str) -> String {
         return home.join(rest).to_string_lossy().to_string();
     }
     path.to_string()
+}
+
+fn resolve_cwd(path: &str) -> Result<String, String> {
+    let (anchor, rest) = if path == "." || path == "$PWD" {
+        (Some(CwdAnchor::CurrentDir), "")
+    } else if let Some(rest) = path.strip_prefix("./") {
+        (Some(CwdAnchor::CurrentDir), rest)
+    } else if let Some(rest) = path.strip_prefix("$PWD/") {
+        (Some(CwdAnchor::CurrentDir), rest)
+    } else {
+        (None, "")
+    };
+
+    match anchor {
+        Some(CwdAnchor::CurrentDir) => {
+            let cwd = std::env::current_dir()
+                .map_err(|e| format!("failed to read current directory: {}", e))?;
+            let full = if rest.is_empty() { cwd } else { cwd.join(rest) };
+            Ok(full.to_string_lossy().to_string())
+        }
+        None => Ok(expand_home(path)),
+    }
+}
+
+enum CwdAnchor {
+    CurrentDir,
 }
 
 fn shell_quote(value: &str) -> String {

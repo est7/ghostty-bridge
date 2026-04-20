@@ -153,7 +153,7 @@ Layout templates let you declare a full pane tree in TOML and apply it in one co
 # Check that a layout file is structurally valid
 ghostty-bridge layout validate layouts/ai-trio.toml
 
-# Open a new window and build the declared layout
+# Open a new tab in the front window and build the declared layout
 ghostty-bridge layout apply layouts/ai-trio.toml
 ```
 

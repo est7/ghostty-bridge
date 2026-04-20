@@ -43,7 +43,7 @@ The binary is invoked as `ghostty-bridge`.
 | `ghostty-bridge broadcast --target <t>... --text\|--keys` | Working | Fans out text or keys across multiple resolved terminals |
 | `ghostty-bridge open window\|tab\|split` | Working | Creates a new Ghostty surface via `new surface configuration` |
 | `ghostty-bridge layout validate <file>` | Working | Validates a TOML layout template before opening anything |
-| `ghostty-bridge layout apply <file>` | Working | Opens a new window, builds a split tree, labels panes, and seeds commands |
+| `ghostty-bridge layout apply <file>` | Working | Opens a new tab in the front window, builds a split tree, labels panes, and seeds commands |
 | `ghostty-bridge focus <target>` | Working | Focuses a terminal or the front window |
 | `ghostty-bridge close <target>` | Working | Closes a terminal, selected tab, or front window |
 | `ghostty-bridge name <target> <label>` | Working | Labels a terminal for easy reference |
@@ -82,7 +82,7 @@ The binary is invoked as `ghostty-bridge`.
    through the selector/label pipeline, deduplicates UUIDs, and then delegates to `input_text`/`send_key`. It
    does not introduce a new AppleScript path; the existing single-terminal primitives are reused.
 
-7. **Layouts are TOML split trees applied from a fresh window** — `layout apply` always opens a new Ghostty window,
+7. **Layouts are TOML split trees applied from a new tab** — `layout apply` opens a new tab in Ghostty's front window,
    then recursively builds the declared split tree. Leaf panes are configured by typing a synthesized shell command
    (`cd`, `export`, then the requested command) so each pane can have independent cwd/env/command state. A layout may
    mark at most one pane with `focus = true`.
@@ -107,7 +107,7 @@ The binary is invoked as `ghostty-bridge`.
 - **No shell setup command yet** — planned `ghostty-bridge shell-setup` to emit shell helper functions.
 - **`find_terminal_index` runs a full AppleScript list on every targeted call** — sequential commands are chatty.
   No batching layer yet.
-- **Layout application currently opens a fresh window only** — there is no `layout apply --target ...` variant for
+- **Layout application currently opens a fresh tab only** — there is no `layout apply --target ...` variant for
   reusing an existing tab or pane tree yet.
 
 ## Notes For The Next Agent

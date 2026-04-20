@@ -169,7 +169,7 @@ direction = "right"
 [root.left]
 type = "pane"
 label = "claude"
-cwd = "~/Est7Projects"
+cwd = "~/path/to/project"
 command = "claude"
 
 [root.right]
@@ -179,13 +179,13 @@ direction = "down"
 [root.right.top]
 type = "pane"
 label = "codex"
-cwd = "~/Est7Projects"
+cwd = "~/path/to/project"
 command = "codex"
 
 [root.right.bottom]
 type = "pane"
 label = "gemini"
-cwd = "~/Est7Projects"
+cwd = "~/path/to/project"
 command = "gemini"
 focus = true
 ```

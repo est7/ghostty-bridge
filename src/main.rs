@@ -8,6 +8,31 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
 
+const LAYOUT_HELP: &str = r#"Examples:
+  ghostty-bridge layout validate layouts/ai-trio.toml
+  ghostty-bridge layout apply layouts/ai-trio.toml
+
+Template shape:
+  name = "optional-name"
+
+  [root]
+  type = "split"
+  direction = "right" # right | left | down | up
+
+  [root.left]
+  type = "pane"
+  label = "claude"
+  cwd = "~/path/to/project"
+  command = "claude"
+
+  [root.right]
+  type = "pane"
+  label = "codex"
+  focus = true
+
+Each pane may set: label, cwd, command, input, env = ["KEY=VALUE"], focus = true.
+A layout may mark at most one pane with focus = true."#;
+
 #[derive(Parser)]
 #[command(name = "ghostty-bridge", bin_name = "ghostty-bridge")]
 #[command(about = "cross-pane communication for AI agents via Ghostty")]
@@ -80,7 +105,10 @@ enum Commands {
     #[command(about = "Close a terminal or active Ghostty context")]
     Close { target: String },
 
-    #[command(about = "Apply or validate a layout template")]
+    #[command(
+        about = "Apply or validate a layout template",
+        after_help = LAYOUT_HELP
+    )]
     Layout {
         #[command(subcommand)]
         command: LayoutCommands,
@@ -89,11 +117,17 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum LayoutCommands {
-    #[command(about = "Apply a layout template")]
-    Apply { file: PathBuf },
+    #[command(about = "Apply a layout template", after_help = LAYOUT_HELP)]
+    Apply {
+        #[arg(value_name = "FILE", help = "Path to a layout TOML file")]
+        file: PathBuf,
+    },
 
-    #[command(about = "Validate a layout template")]
-    Validate { file: PathBuf },
+    #[command(about = "Validate a layout template", after_help = LAYOUT_HELP)]
+    Validate {
+        #[arg(value_name = "FILE", help = "Path to a layout TOML file")]
+        file: PathBuf,
+    },
 }
 
 #[derive(Args)]

@@ -7,6 +7,34 @@ pub struct TerminalInfo {
     pub cwd: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct SurfaceConfig {
+    pub cwd: Option<String>,
+    pub command: Option<String>,
+    pub input: Option<String>,
+    pub wait_after_command: bool,
+    pub env: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum SplitDirection {
+    Right,
+    Left,
+    Down,
+    Up,
+}
+
+impl SplitDirection {
+    fn as_applescript(self) -> &'static str {
+        match self {
+            SplitDirection::Right => "right",
+            SplitDirection::Left => "left",
+            SplitDirection::Down => "down",
+            SplitDirection::Up => "up",
+        }
+    }
+}
+
 fn osascript(script: &str) -> Result<String, String> {
     let output = Command::new("osascript")
         .stdin(std::process::Stdio::piped())
@@ -28,6 +56,57 @@ fn osascript(script: &str) -> Result<String, String> {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         Err(stderr)
     }
+}
+
+fn applescript_string(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+fn quoted_lines(values: &[String]) -> String {
+    if values.is_empty() {
+        "{}".to_string()
+    } else {
+        let joined = values
+            .iter()
+            .map(|v| applescript_string(v))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("{{{}}}", joined)
+    }
+}
+
+fn config_block(config: &SurfaceConfig) -> String {
+    let mut lines = vec!["set cfg to new surface configuration".to_string()];
+
+    if let Some(cwd) = &config.cwd {
+        lines.push(format!(
+            "set initial working directory of cfg to {}",
+            applescript_string(cwd)
+        ));
+    }
+    if let Some(command) = &config.command {
+        lines.push(format!(
+            "set command of cfg to {}",
+            applescript_string(command)
+        ));
+    }
+    if let Some(input) = &config.input {
+        lines.push(format!(
+            "set initial input of cfg to {}",
+            applescript_string(input)
+        ));
+    }
+    if config.wait_after_command {
+        lines.push("set wait after command of cfg to true".to_string());
+    }
+    if !config.env.is_empty() {
+        lines.push(format!(
+            "set environment variables of cfg to {}",
+            quoted_lines(&config.env)
+        ));
+    }
+
+    lines.join("\n    ")
 }
 
 pub fn is_ghostty_running() -> bool {
@@ -85,14 +164,14 @@ pub fn input_text(id: &str, text: &str) -> bool {
         None => return false,
     };
 
-    let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
     let script = format!(
         r#"tell application "Ghostty"
     set allTerms to terminals
     set t to item {} of allTerms
-    input text "{}" to t
+    input text {} to t
 end tell"#,
-        idx, escaped
+        idx,
+        applescript_string(text)
     );
     osascript(&script).is_ok()
 }
@@ -103,32 +182,32 @@ pub fn send_key(id: &str, key: &str) -> bool {
         None => return false,
     };
 
-    let escaped = key.replace('"', "\\\"");
     let script = format!(
         r#"tell application "Ghostty"
     set allTerms to terminals
     set t to item {} of allTerms
-    send key "{}" to t
+    send key {} to t
 end tell"#,
-        idx, escaped
+        idx,
+        applescript_string(key)
     );
     osascript(&script).is_ok()
 }
 
-fn perform_action(id: &str, action: &str) -> bool {
+pub fn perform_action(id: &str, action: &str) -> bool {
     let idx = match find_terminal_index(id) {
         Some(i) => i + 1,
         None => return false,
     };
 
-    let escaped = action.replace('"', "\\\"");
     let script = format!(
         r#"tell application "Ghostty"
     set allTerms to terminals
     set t to item {} of allTerms
-    perform action "{}" on t
+    perform action {} on t
 end tell"#,
-        idx, escaped
+        idx,
+        applescript_string(action)
     );
     osascript(&script).is_ok()
 }
@@ -179,11 +258,7 @@ fn read_clipboard() -> Option<String> {
     let output = Command::new("pbpaste").output().ok()?;
     if output.status.success() {
         let text = String::from_utf8_lossy(&output.stdout).to_string();
-        if text.is_empty() {
-            None
-        } else {
-            Some(text)
-        }
+        if text.is_empty() { None } else { Some(text) }
     } else {
         None
     }
@@ -223,10 +298,10 @@ pub fn find_current_terminal_id() -> Option<String> {
     if !matches.is_empty() {
         if let Some(tty) = current_tty() {
             for t in &matches {
-                if let Some(child_tty) = get_terminal_tty_for_cwd(&t.cwd) {
-                    if tty == child_tty {
-                        return Some(t.id.clone());
-                    }
+                if let Some(child_tty) = get_terminal_tty_for_cwd(&t.cwd)
+                    && tty == child_tty
+                {
+                    return Some(t.id.clone());
                 }
             }
         }
@@ -237,6 +312,182 @@ pub fn find_current_terminal_id() -> Option<String> {
     }
 
     None
+}
+
+pub fn focused_terminal_id() -> Option<String> {
+    let script = r#"
+tell application "Ghostty"
+    return id of focused terminal of selected tab of front window
+end tell
+"#;
+    osascript(script).ok().filter(|s| !s.is_empty())
+}
+
+pub fn terminal_ids_in_selected_tab() -> Result<Vec<String>, String> {
+    let script = r#"
+tell application "Ghostty"
+    set output to ""
+    set allTerms to terminals of selected tab of front window
+    repeat with t in allTerms
+        set output to output & (id of t) & linefeed
+    end repeat
+    return output
+end tell
+"#;
+    let raw = osascript(script)?;
+    let ids = raw
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if ids.is_empty() {
+        Err("No terminals found in the selected tab".to_string())
+    } else {
+        Ok(ids)
+    }
+}
+
+pub fn terminal_ids_in_front_window() -> Result<Vec<String>, String> {
+    let script = r#"
+tell application "Ghostty"
+    set output to ""
+    set allTerms to terminals of front window
+    repeat with t in allTerms
+        set output to output & (id of t) & linefeed
+    end repeat
+    return output
+end tell
+"#;
+    let raw = osascript(script)?;
+    let ids = raw
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if ids.is_empty() {
+        Err("No terminals found in the front window".to_string())
+    } else {
+        Ok(ids)
+    }
+}
+
+pub fn open_window(config: &SurfaceConfig) -> Result<String, String> {
+    let config_block = config_block(config);
+    let script = format!(
+        r#"tell application "Ghostty"
+    {}
+    set win to new window with configuration cfg
+    return id of focused terminal of selected tab of win
+end tell"#,
+        config_block
+    );
+    osascript(&script)
+}
+
+pub fn open_tab(config: &SurfaceConfig) -> Result<String, String> {
+    let config_block = config_block(config);
+    let script = format!(
+        r#"tell application "Ghostty"
+    {}
+    set win to front window
+    set newTab to new tab in win with configuration cfg
+    return id of focused terminal of newTab
+end tell"#,
+        config_block
+    );
+    osascript(&script)
+}
+
+pub fn open_split(
+    target_id: &str,
+    direction: SplitDirection,
+    config: &SurfaceConfig,
+) -> Result<String, String> {
+    let idx = find_terminal_index(target_id)
+        .map(|i| i + 1)
+        .ok_or_else(|| format!("Could not find terminal {}", target_id))?;
+    let config_block = config_block(config);
+    let script = format!(
+        r#"tell application "Ghostty"
+    set allTerms to terminals
+    set baseTerm to item {} of allTerms
+    {}
+    set newTerm to split baseTerm direction {} with configuration cfg
+    return id of newTerm
+end tell"#,
+        idx,
+        config_block,
+        direction.as_applescript()
+    );
+    osascript(&script)
+}
+
+pub fn focus_terminal(id: &str) -> bool {
+    let idx = match find_terminal_index(id) {
+        Some(i) => i + 1,
+        None => return false,
+    };
+    let script = format!(
+        r#"tell application "Ghostty"
+    set allTerms to terminals
+    focus item {} of allTerms
+end tell"#,
+        idx
+    );
+    osascript(&script).is_ok()
+}
+
+pub fn focus_focused_terminal() -> bool {
+    let script = r#"
+tell application "Ghostty"
+    focus focused terminal of selected tab of front window
+end tell
+"#;
+    osascript(script).is_ok()
+}
+
+pub fn activate_front_window() -> bool {
+    let script = r#"
+tell application "Ghostty"
+    activate window (front window)
+end tell
+"#;
+    osascript(script).is_ok()
+}
+
+pub fn close_terminal(id: &str) -> bool {
+    let idx = match find_terminal_index(id) {
+        Some(i) => i + 1,
+        None => return false,
+    };
+    let script = format!(
+        r#"tell application "Ghostty"
+    set allTerms to terminals
+    close item {} of allTerms
+end tell"#,
+        idx
+    );
+    osascript(&script).is_ok()
+}
+
+pub fn close_selected_tab() -> bool {
+    let script = r#"
+tell application "Ghostty"
+    close tab (selected tab of front window)
+end tell
+"#;
+    osascript(script).is_ok()
+}
+
+pub fn close_front_window() -> bool {
+    let script = r#"
+tell application "Ghostty"
+    close window (front window)
+end tell
+"#;
+    osascript(script).is_ok()
 }
 
 fn current_tty() -> Option<String> {

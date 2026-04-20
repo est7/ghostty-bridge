@@ -1,0 +1,28 @@
+name = "ai-trio"
+
+[root]
+type = "split"
+direction = "right"
+
+[root.left]
+type = "pane"
+label = "claude"
+cwd = "~/Est7Projects"
+command = "claude"
+
+[root.right]
+type = "split"
+direction = "down"
+
+[root.right.top]
+type = "pane"
+label = "codex"
+cwd = "~/Est7Projects"
+command = "codex"
+
+[root.right.bottom]
+type = "pane"
+label = "gemini"
+cwd = "~/Est7Projects"
+command = "gemini"
+focus = true

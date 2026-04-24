@@ -52,7 +52,7 @@ enum Commands {
 
     #[command(about = "Type text into a terminal without pressing Enter")]
     Type {
-        #[arg(help = "Terminal id, label, or 'focused'")]
+        #[arg(help = "Terminal id, label, tty:<path>, or 'focused'")]
         target: String,
         #[arg(help = "Text to type (no Enter sent)")]
         text: String,
@@ -60,7 +60,7 @@ enum Commands {
 
     #[command(about = "Read terminal output")]
     Read {
-        #[arg(help = "Terminal id, label, or 'focused'")]
+        #[arg(help = "Terminal id, label, tty:<path>, or 'focused'")]
         target: String,
         #[arg(default_value = "50", help = "Number of lines to read from the end")]
         lines: usize,
@@ -68,7 +68,7 @@ enum Commands {
 
     #[command(about = "Send special keys (Enter, Escape, C-c, etc.)")]
     Keys {
-        #[arg(help = "Terminal id, label, or 'focused'")]
+        #[arg(help = "Terminal id, label, tty:<path>, or 'focused'")]
         target: String,
         #[arg(num_args = 1.., help = "Key names: Enter, Escape, Tab, C-c, M-x, etc.")]
         keys: Vec<String>,
@@ -76,7 +76,7 @@ enum Commands {
 
     #[command(about = "Label a terminal")]
     Name {
-        #[arg(help = "Terminal id or 'focused'")]
+        #[arg(help = "Terminal id, tty:<path>, or 'focused'")]
         target: String,
         #[arg(help = "Label to assign")]
         label: String,
@@ -90,6 +90,9 @@ enum Commands {
 
     #[command(about = "Print this terminal's Ghostty id")]
     Id,
+
+    #[command(about = "Print this terminal's TTY device path")]
+    Tty,
 
     #[command(about = "Diagnose Ghostty connectivity")]
     Doctor,
@@ -121,7 +124,7 @@ Provided helpers:
 
     #[command(about = "Send a command to a terminal and press Enter")]
     Exec {
-        #[arg(help = "Terminal id, label, or 'focused'")]
+        #[arg(help = "Terminal id, label, tty:<path>, or 'focused'")]
         target: String,
         #[arg(help = "Shell command to type and execute")]
         command: String,
@@ -132,16 +135,15 @@ Provided helpers:
 
     #[command(about = "Focus a terminal or active Ghostty context")]
     Focus {
-        #[arg(help = "Terminal id, label, 'focused', 'selected-tab', or 'front-window'")]
+        #[arg(help = "Terminal id, label, tty:<path>, 'focused', 'selected-tab', or 'front-window'")]
         target: String,
     },
 
     #[command(about = "Close a terminal or active Ghostty context")]
     Close {
-        #[arg(help = "Terminal id, label, 'focused', 'selected-tab', or 'front-window'")]
+        #[arg(help = "Terminal id, label, tty:<path>, 'focused', 'selected-tab', or 'front-window'")]
         target: String,
     },
-
     #[command(
         about = "Apply or validate a layout template",
         after_help = LAYOUT_HELP
@@ -199,7 +201,7 @@ struct OpenArgs {
 
 #[derive(Args)]
 struct BroadcastArgs {
-    #[arg(long = "target", required = true, num_args = 1.., help = "Terminal ids, labels, 'focused', 'selected-tab', or 'front-window' (repeatable)")]
+    #[arg(long = "target", required = true, num_args = 1.., help = "Terminal ids, labels, tty:<path>, 'focused', 'selected-tab', or 'front-window' (repeatable)")]
     targets: Vec<String>,
 
     #[arg(long, help = "Text to type and send Enter (mutually exclusive with --keys)")]
@@ -297,6 +299,15 @@ fn parse_target(target: &str) -> ParsedTarget {
 }
 
 fn resolve_label_or_uuid(target: &str) -> String {
+    if let Some(tty_path) = target.strip_prefix("tty:") {
+        let terminals = applescript::list_terminals();
+        for t in &terminals {
+            if t.tty == tty_path {
+                return t.id.clone();
+            }
+        }
+        return target.to_string();
+    }
     let lowered = target.to_lowercase();
     let looks_like_uuid = lowered.contains('-') && lowered.len() >= 20;
     if !looks_like_uuid && let Some(id) = labels::resolve(target) {
@@ -850,6 +861,14 @@ fn main() {
         Commands::Resolve { label } => match labels::resolve(&label) {
             Some(id) => println!("{}", id),
             None => exit_with_error(format!("No terminal labeled '{}'", label)),
+        },
+
+        Commands::Tty => match applescript::current_tty() {
+            Some(tty) => println!("{}", tty),
+            None => {
+                eprintln!("Could not determine TTY for this terminal");
+                process::exit(1);
+            }
         },
 
         Commands::Id => match applescript::find_current_terminal_id() {

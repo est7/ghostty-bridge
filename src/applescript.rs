@@ -483,7 +483,7 @@ end tell
     osascript(script).is_ok()
 }
 
-fn current_tty() -> Option<String> {
+pub fn current_tty() -> Option<String> {
     let mut pid = std::process::id();
     loop {
         let output = Command::new("ps")

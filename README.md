@@ -32,14 +32,16 @@ cargo install ghostty-bridge
 | `ghostty-bridge name <target> <label>` | Label a terminal for easy reference |
 | `ghostty-bridge resolve <label>` | Resolve a label to a terminal UUID |
 | `ghostty-bridge id` | Print this terminal's Ghostty ID |
+| `ghostty-bridge tty` | Print this terminal's TTY device path |
 | `ghostty-bridge doctor` | Diagnose Ghostty connectivity |
 
 ## Targets
 
-Most commands accept a terminal UUID or a previously assigned label.
+Most commands accept a target to identify a terminal. The following forms are supported:
 
-Built-in selectors are also supported:
-
+- Terminal UUID (e.g. `B7B29D1F-3720-48AC-ADA7-D507B260E1F0`)
+- Label (previously assigned via `name`)
+- `tty:<path>` — match by TTY device path (e.g. `tty:/dev/ttys003`)
 - `focused` — the focused terminal of the selected tab in the front window
 - `selected-tab` — all terminals in the selected tab of the front window
 - `front-window` — all terminals in the front Ghostty window
@@ -59,6 +61,22 @@ ghostty-bridge list --json
 
 # Find the current terminal's ID
 ghostty-bridge id
+
+# Find the current terminal's TTY device path
+ghostty-bridge tty
+```
+
+### Target by TTY
+
+```sh
+# Read output from a terminal identified by its TTY
+ghostty-bridge read tty:/dev/ttys003
+
+# Execute a command in a terminal by TTY
+ghostty-bridge exec tty:/dev/ttys003 "cargo test"
+
+# Combine with tty subcommand to target the current pane
+ghostty-bridge read tty:$(ghostty-bridge tty)
 ```
 
 ### Label terminals for easy reference

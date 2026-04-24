@@ -114,10 +114,6 @@ pub fn is_ghostty_running() -> bool {
         && osascript("tell application \"Ghostty\" to get version").is_ok()
 }
 
-pub fn get_version() -> Option<String> {
-    osascript("tell application \"Ghostty\" to get version").ok()
-}
-
 pub fn list_terminals() -> Vec<TerminalInfo> {
     let script = r#"
 tell application "Ghostty"

@@ -36,9 +36,7 @@ The binary is invoked as `ghostty-bridge`.
 | `ghostty-bridge list [--json]` | Working | Shows id, name, cwd, label. `--json` emits a stable JSON array for scripts |
 | `ghostty-bridge type <target> <text>` | Working | Sends text without pressing Enter |
 | `ghostty-bridge keys <target> <key>...` | Working | Sends special keys (Enter, C-c, etc.) |
-| `ghostty-bridge read <target> [lines] [--since-last-message]` | Working | Reads screen via select_all + copy_to_clipboard, restores clipboard. `--since-last-message` slices output after the last bridge-framed line |
-| `ghostty-bridge message <target> <text>` | Working | Types `[ghostty-bridge:<sender> >>> <recipient>] <text>` and presses Enter |
-| `ghostty-bridge reply <text> [--lines N]` | Working | Reads the current terminal, finds the last bridge message, and messages the sender back |
+| `ghostty-bridge read <target> [lines]` | Working | Reads screen via select_all + copy_to_clipboard, restores clipboard |
 | `ghostty-bridge exec <target> <command>` | Working | Types a command and presses Enter in one call |
 | `ghostty-bridge broadcast --target <t>... --text\|--keys` | Working | Fans out text or keys across multiple resolved terminals |
 | `ghostty-bridge open window\|tab\|split` | Working | Creates a new Ghostty surface via `new surface configuration` |
@@ -50,6 +48,7 @@ The binary is invoked as `ghostty-bridge`.
 | `ghostty-bridge resolve <label>` | Working | Resolves a label to a terminal UUID |
 | `ghostty-bridge id` | Working | Identifies current terminal by matching cwd |
 | `ghostty-bridge doctor` | Working | Diagnoses Ghostty connectivity |
+| `ghostty-bridge shell-setup [fish\|zsh\|bash]` | Working | Prints shell helpers for `eval`; auto-detects shell from `$SHELL` |
 
 **Target resolution:**
 
@@ -87,10 +86,6 @@ The binary is invoked as `ghostty-bridge`.
    (`cd`, `export`, then the requested command) so each pane can have independent cwd/env/command state. A layout may
    mark at most one pane with `focus = true`.
 
-8. **Agent messages use a parseable framing line** — `message` and `reply` emit
-   `[ghostty-bridge:<sender> >>> <recipient>] <body>`. `reply` and `read --since-last-message` both parse the
-   visible terminal transcript using that exact framing, so docs and automation should treat `src/main.rs` as canonical.
-
 9. **Structured terminal discovery is first-class** — `list --json` emits a stable array of `{ id, name, cwd, label }`
    objects so scripts do not need to scrape the human-readable table output.
 
@@ -104,7 +99,6 @@ The binary is invoked as `ghostty-bridge`.
 - **Terminal identification is fragile** — matching by cwd alone can be ambiguous. Built-in selectors mitigate
   this for most workflows, but `ghostty-bridge id` still needs improvement (tty matching or a Ghostty env var).
 - **No Linux support** — Ghostty AppleScript is macOS only. Linux would need a different IPC mechanism.
-- **No shell setup command yet** — planned `ghostty-bridge shell-setup` to emit shell helper functions.
 - **`find_terminal_index` runs a full AppleScript list on every targeted call** — sequential commands are chatty.
   No batching layer yet.
 - **Layout application currently opens a fresh tab only** — there is no `layout apply --target ...` variant for

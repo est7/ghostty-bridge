@@ -79,6 +79,28 @@ enum Commands {
     #[command(about = "Diagnose Ghostty connectivity")]
     Doctor,
 
+    #[command(
+        about = "Print shell helpers for eval",
+        after_help = r#"Setup:
+  fish:  ghostty-bridge shell-setup fish | source
+  zsh:   eval "$(ghostty-bridge shell-setup zsh)"
+  bash:  eval "$(ghostty-bridge shell-setup bash)"
+
+Add to your shell config for persistent use.
+Auto-detects shell from $SHELL when argument is omitted.
+
+Provided helpers:
+  gb              Alias for ghostty-bridge
+  gb-id           Cache current terminal ID in $GHOSTTY_BRIDGE_ID
+  gb-exec T CMD   Send a command to target T (type + Enter)
+  gb-read T [N]   Read last N lines (default 50) from target T
+  gb-watch T PAT  Poll target T until output matches PAT (grep -q)"#
+    )]
+    ShellSetup {
+        #[arg(value_enum, help = "Target shell (auto-detected from $SHELL if omitted)")]
+        shell: Option<ShellKind>,
+    },
+
     #[command(about = "Open a new Ghostty window, tab, or split")]
     Open(OpenArgs),
 
@@ -166,6 +188,13 @@ enum OpenKind {
     Window,
     Tab,
     Split,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum ShellKind {
+    Fish,
+    Zsh,
+    Bash,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, ValueEnum)]
@@ -819,12 +848,6 @@ fn main() {
                 process::exit(1);
             }
 
-            let version = applescript::get_version();
-            println!(
-                "Ghostty version:    {}",
-                version.unwrap_or_else(|| "unknown".into())
-            );
-
             let terminals = applescript::list_terminals();
             println!("Total terminals:    {}", terminals.len());
 
@@ -847,6 +870,98 @@ fn main() {
 
             println!("---");
             println!("Status: OK");
+        }
+
+        Commands::ShellSetup { shell } => {
+            let kind = shell.unwrap_or_else(|| {
+                let s = std::env::var("SHELL").unwrap_or_default();
+                if s.ends_with("/fish") {
+                    ShellKind::Fish
+                } else if s.ends_with("/zsh") {
+                    ShellKind::Zsh
+                } else {
+                    ShellKind::Bash
+                }
+            });
+            match kind {
+                ShellKind::Fish => print!(
+                    r#"# ghostty-bridge shell helpers
+# Setup: ghostty-bridge shell-setup fish | source
+
+alias gb="ghostty-bridge"
+
+function gb-id -d "Cache current terminal ID in GHOSTTY_BRIDGE_ID"
+    set -gx GHOSTTY_BRIDGE_ID (ghostty-bridge id)
+    and echo $GHOSTTY_BRIDGE_ID
+end
+
+function gb-exec -d "Send a command to a target terminal" -a target cmd
+    test -n "$target" -a -n "$cmd"; or begin
+        echo "Usage: gb-exec <target> <command>" >&2; return 1
+    end
+    ghostty-bridge exec "$target" "$cmd"
+end
+
+function gb-read -d "Read last N lines from a target terminal" -a target lines
+    test -n "$target"; or begin
+        echo "Usage: gb-read <target> [lines]" >&2; return 1
+    end
+    ghostty-bridge read "$target" $lines
+end
+
+function gb-watch -d "Poll target until output matches a pattern" -a target pattern
+    test -n "$target" -a -n "$pattern"; or begin
+        echo "Usage: gb-watch <target> <pattern>" >&2; return 1
+    end
+    while true
+        if ghostty-bridge read "$target" 50 2>/dev/null | grep -q "$pattern"
+            ghostty-bridge read "$target" 50
+            return 0
+        end
+        sleep 2
+    end
+end
+"#
+                ),
+                ShellKind::Zsh | ShellKind::Bash => print!(
+                    r#"# ghostty-bridge shell helpers
+# Setup: eval "$(ghostty-bridge shell-setup)"
+
+alias gb="ghostty-bridge"
+
+gb-id() {{
+    GHOSTTY_BRIDGE_ID="$(ghostty-bridge id)" && export GHOSTTY_BRIDGE_ID && echo "$GHOSTTY_BRIDGE_ID"
+}}
+
+gb-exec() {{
+    if [ -z "$1" ] || [ -z "$2" ]; then
+        echo "Usage: gb-exec <target> <command>" >&2; return 1
+    fi
+    ghostty-bridge exec "$1" "$2"
+}}
+
+gb-read() {{
+    if [ -z "$1" ]; then
+        echo "Usage: gb-read <target> [lines]" >&2; return 1
+    fi
+    ghostty-bridge read "$1" ${{2:-50}}
+}}
+
+gb-watch() {{
+    if [ -z "$1" ] || [ -z "$2" ]; then
+        echo "Usage: gb-watch <target> <pattern>" >&2; return 1
+    fi
+    while true; do
+        if ghostty-bridge read "$1" 50 2>/dev/null | grep -q "$2"; then
+            ghostty-bridge read "$1" 50
+            return 0
+        fi
+        sleep 2
+    done
+}}
+"#
+                ),
+            }
         }
 
         Commands::Open(args) => {

@@ -759,6 +759,7 @@ struct ListEntry<'a> {
     id: &'a str,
     name: &'a str,
     cwd: &'a str,
+    tty: &'a str,
     label: Option<&'a str>,
 }
 
@@ -772,6 +773,7 @@ fn build_list_entries<'a>(
             id: &t.id,
             name: &t.name,
             cwd: &t.cwd,
+            tty: &t.tty,
             label: labels
                 .iter()
                 .find(|(_, id)| *id == &t.id)
@@ -799,10 +801,11 @@ fn main() {
                 for entry in entries {
                     let label = entry.label.unwrap_or("-");
                     println!(
-                        "{:<38} {:<30} {:<40} {}",
+                        "{:<38} {:<30} {:<40} {:<16} {}",
                         entry.id,
                         truncate(entry.name, 30),
                         entry.cwd,
+                        entry.tty,
                         label
                     );
                 }
@@ -1154,11 +1157,13 @@ mod tests {
                 id: "ID-1".to_string(),
                 name: "claude".to_string(),
                 cwd: "/a".to_string(),
+                tty: "/dev/ttys001".to_string(),
             },
             applescript::TerminalInfo {
                 id: "ID-2".to_string(),
                 name: "codex".to_string(),
                 cwd: "/b".to_string(),
+                tty: "/dev/ttys002".to_string(),
             },
         ];
         let mut labels: HashMap<String, String> = HashMap::new();
@@ -1178,6 +1183,7 @@ mod tests {
             id: "ID-1".to_string(),
             name: "claude".to_string(),
             cwd: "/a".to_string(),
+            tty: "/dev/ttys001".to_string(),
         }];
         let mut labels: HashMap<String, String> = HashMap::new();
         labels.insert("claude".to_string(), "ID-1".to_string());

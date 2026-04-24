@@ -33,7 +33,7 @@ The binary is invoked as `ghostty-bridge`.
 
 | Command | Status | Notes |
 |---------|--------|-------|
-| `ghostty-bridge list [--json]` | Working | Shows id, name, cwd, label. `--json` emits a stable JSON array for scripts |
+| `ghostty-bridge list [--json]` | Working | Shows id, name, cwd, tty, label. `--json` emits a stable JSON array for scripts |
 | `ghostty-bridge type <target> <text>` | Working | Sends text without pressing Enter |
 | `ghostty-bridge keys <target> <key>...` | Working | Sends special keys (Enter, C-c, etc.) |
 | `ghostty-bridge read <target> [lines]` | Working | Reads screen via select_all + copy_to_clipboard, restores clipboard |
@@ -66,8 +66,9 @@ The binary is invoked as `ghostty-bridge`.
    `-e` mode doesn't handle certain escape sequences. Field delimiter for structured output is `|||`.
 
 3. **Terminal identification** — `ghostty-bridge id` matches by `$TERM_PROGRAM == "ghostty"` + current working directory.
-   Ambiguous if multiple terminals share the same cwd. Prefer built-in selectors like `focused`, `selected-tab`,
-   and `front-window` when scripting; fall back to `id` only when you really need the calling terminal.
+   When multiple terminals share the same cwd, it disambiguates by TTY: walks the process tree via `ps` to find
+   the controlling TTY, then matches against each terminal's `tty` property from Ghostty's AppleScript API.
+   This works reliably in agent subprocesses where stdin is piped and `tty` command returns "not a tty".
 
 4. **Label storage** — JSON file in `~/Library/Application Support/ghostty-bridge/labels.json`. Labels
    are ephemeral and not tied to Ghostty sessions.
@@ -86,7 +87,7 @@ The binary is invoked as `ghostty-bridge`.
    (`cd`, `export`, then the requested command) so each pane can have independent cwd/env/command state. A layout may
    mark at most one pane with `focus = true`.
 
-9. **Structured terminal discovery is first-class** — `list --json` emits a stable array of `{ id, name, cwd, label }`
+9. **Structured terminal discovery is first-class** — `list --json` emits a stable array of `{ id, name, cwd, tty, label }`
    objects so scripts do not need to scrape the human-readable table output.
 
 ## Open Questions / Known Gaps
@@ -96,8 +97,6 @@ The binary is invoked as `ghostty-bridge`.
   without Ghostty exposing buffer semantics (OSC 133 markers are internal only).
 - **`perform action "write_screen_file"`** returns false via AppleScript — may need a Ghostty fix or
   different action string format. If this worked, it would be a cleaner read path than clipboard.
-- **Terminal identification is fragile** — matching by cwd alone can be ambiguous. Built-in selectors mitigate
-  this for most workflows, but `ghostty-bridge id` still needs improvement (tty matching or a Ghostty env var).
 - **No Linux support** — Ghostty AppleScript is macOS only. Linux would need a different IPC mechanism.
 - **`find_terminal_index` runs a full AppleScript list on every targeted call** — sequential commands are chatty.
   No batching layer yet.

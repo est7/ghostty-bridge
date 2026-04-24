@@ -5,6 +5,7 @@ pub struct TerminalInfo {
     pub id: String,
     pub name: String,
     pub cwd: String,
+    pub tty: String,
 }
 
 #[derive(Debug, Clone)]
@@ -125,7 +126,8 @@ tell application "Ghostty"
         set tid to id of t
         set tn to name of t
         set twd to working directory of t
-        set output to output & tid & "|||" & tn & "|||" & twd & linefeed
+        set ttty to tty of t
+        set output to output & tid & "|||" & tn & "|||" & twd & "|||" & ttty & linefeed
     end repeat
     return output
 end tell
@@ -138,11 +140,12 @@ end tell
     let mut terminals = Vec::new();
     for line in raw.lines() {
         let parts: Vec<&str> = line.split("|||").collect();
-        if parts.len() >= 3 {
+        if parts.len() >= 4 {
             terminals.push(TerminalInfo {
                 id: parts[0].to_string(),
                 name: parts[1].to_string(),
                 cwd: parts[2].to_string(),
+                tty: parts[3].to_string(),
             });
         }
     }
@@ -291,19 +294,13 @@ pub fn find_current_terminal_id() -> Option<String> {
         return Some(matches[0].id.clone());
     }
 
-    if !matches.is_empty() {
-        if let Some(tty) = current_tty() {
-            for t in &matches {
-                if let Some(child_tty) = get_terminal_tty_for_cwd(&t.cwd)
-                    && tty == child_tty
-                {
-                    return Some(t.id.clone());
-                }
+    if !matches.is_empty()
+        && let Some(tty) = current_tty()
+    {
+        for t in &matches {
+            if t.tty == tty {
+                return Some(t.id.clone());
             }
-        }
-
-        if let Some(_shell_pid) = find_shell_pid_for_cwd(cwd_str) {
-            return Some(matches[0].id.clone());
         }
     }
 
@@ -487,18 +484,25 @@ end tell
 }
 
 fn current_tty() -> Option<String> {
-    let output = Command::new("tty").output().ok()?;
-    if output.status.success() {
-        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
-    } else {
-        None
+    let mut pid = std::process::id();
+    loop {
+        let output = Command::new("ps")
+            .args(["-o", "ppid=,tty=", "-p", &pid.to_string()])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let line = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let mut parts = line.split_whitespace();
+        let ppid: u32 = parts.next()?.parse().ok()?;
+        let tty = parts.next().unwrap_or("??");
+        if tty != "??" {
+            return Some(format!("/dev/{}", tty));
+        }
+        if ppid <= 1 {
+            return None;
+        }
+        pid = ppid;
     }
-}
-
-fn get_terminal_tty_for_cwd(_cwd: &str) -> Option<String> {
-    None
-}
-
-fn find_shell_pid_for_cwd(_cwd: &str) -> Option<u32> {
-    None
 }

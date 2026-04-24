@@ -46,32 +46,47 @@ struct Cli {
 enum Commands {
     #[command(about = "Show all terminals (id, name, cwd, label)")]
     List {
-        #[arg(long)]
+        #[arg(long, help = "Output as JSON instead of columns")]
         json: bool,
     },
 
     #[command(about = "Type text into a terminal without pressing Enter")]
-    Type { target: String, text: String },
+    Type {
+        #[arg(help = "Terminal id, label, or 'focused'")]
+        target: String,
+        #[arg(help = "Text to type (no Enter sent)")]
+        text: String,
+    },
 
     #[command(about = "Read terminal output")]
     Read {
+        #[arg(help = "Terminal id, label, or 'focused'")]
         target: String,
-        #[arg(default_value = "50")]
+        #[arg(default_value = "50", help = "Number of lines to read from the end")]
         lines: usize,
     },
 
     #[command(about = "Send special keys (Enter, Escape, C-c, etc.)")]
     Keys {
+        #[arg(help = "Terminal id, label, or 'focused'")]
         target: String,
-        #[arg(num_args = 1..)]
+        #[arg(num_args = 1.., help = "Key names: Enter, Escape, Tab, C-c, M-x, etc.")]
         keys: Vec<String>,
     },
 
     #[command(about = "Label a terminal")]
-    Name { target: String, label: String },
+    Name {
+        #[arg(help = "Terminal id or 'focused'")]
+        target: String,
+        #[arg(help = "Label to assign")]
+        label: String,
+    },
 
     #[command(about = "Print terminal id for a label")]
-    Resolve { label: String },
+    Resolve {
+        #[arg(help = "Label to look up")]
+        label: String,
+    },
 
     #[command(about = "Print this terminal's Ghostty id")]
     Id,
@@ -105,16 +120,27 @@ Provided helpers:
     Open(OpenArgs),
 
     #[command(about = "Send a command to a terminal and press Enter")]
-    Exec { target: String, command: String },
+    Exec {
+        #[arg(help = "Terminal id, label, or 'focused'")]
+        target: String,
+        #[arg(help = "Shell command to type and execute")]
+        command: String,
+    },
 
     #[command(about = "Run the same text or keys across multiple targets")]
     Broadcast(BroadcastArgs),
 
     #[command(about = "Focus a terminal or active Ghostty context")]
-    Focus { target: String },
+    Focus {
+        #[arg(help = "Terminal id, label, 'focused', 'selected-tab', or 'front-window'")]
+        target: String,
+    },
 
     #[command(about = "Close a terminal or active Ghostty context")]
-    Close { target: String },
+    Close {
+        #[arg(help = "Terminal id, label, 'focused', 'selected-tab', or 'front-window'")]
+        target: String,
+    },
 
     #[command(
         about = "Apply or validate a layout template",
@@ -146,40 +172,40 @@ struct OpenArgs {
     #[arg(value_enum)]
     kind: OpenKind,
 
-    #[arg(long, value_enum)]
+    #[arg(long, value_enum, help = "Split direction (only for 'open split')")]
     direction: Option<SplitDirectionArg>,
 
-    #[arg(long)]
+    #[arg(long, help = "Terminal to split from (id, label, or 'focused'; only for 'open split')")]
     target: Option<String>,
 
-    #[arg(long)]
+    #[arg(long, help = "Working directory for the new surface")]
     cwd: Option<String>,
 
-    #[arg(long)]
+    #[arg(long, help = "Replace the default shell process (like exec, not a shell command)")]
     command: Option<String>,
 
-    #[arg(long)]
+    #[arg(long, help = "Initial text typed into the pane (no Enter sent; use 'exec' to run commands)")]
     input: Option<String>,
 
-    #[arg(long)]
+    #[arg(long, help = "Keep the pane open after --command exits")]
     wait: bool,
 
-    #[arg(long = "env")]
+    #[arg(long = "env", help = "Environment variable in KEY=VALUE format (repeatable)")]
     env: Vec<String>,
 
-    #[arg(long)]
+    #[arg(long, help = "Assign a label to the new terminal")]
     label: Option<String>,
 }
 
 #[derive(Args)]
 struct BroadcastArgs {
-    #[arg(long = "target", required = true, num_args = 1..)]
+    #[arg(long = "target", required = true, num_args = 1.., help = "Terminal ids, labels, 'focused', 'selected-tab', or 'front-window' (repeatable)")]
     targets: Vec<String>,
 
-    #[arg(long)]
+    #[arg(long, help = "Text to type and send Enter (mutually exclusive with --keys)")]
     text: Option<String>,
 
-    #[arg(long, num_args = 1..)]
+    #[arg(long, num_args = 1.., help = "Key names to send (mutually exclusive with --text)")]
     keys: Vec<String>,
 }
 

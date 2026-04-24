@@ -53,23 +53,11 @@ enum Commands {
     #[command(about = "Type text into a terminal without pressing Enter")]
     Type { target: String, text: String },
 
-    #[command(about = "Type text with auto-prepended sender info and reply target")]
-    Message { target: String, text: String },
-
-    #[command(about = "Reply to the latest ghostty-bridge message in this terminal")]
-    Reply {
-        text: String,
-        #[arg(long, default_value = "200")]
-        lines: usize,
-    },
-
     #[command(about = "Read terminal output")]
     Read {
         target: String,
         #[arg(default_value = "50")]
         lines: usize,
-        #[arg(long)]
-        since_last_message: bool,
     },
 
     #[command(about = "Send special keys (Enter, Escape, C-c, etc.)")]
@@ -711,63 +699,6 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-const MESSAGE_PREFIX: &str = "[ghostty-bridge:";
-
-#[derive(Debug, PartialEq, Eq)]
-struct ParsedMessage {
-    sender: String,
-    recipient: String,
-    body: String,
-}
-
-fn parse_bridge_message(line: &str) -> Option<ParsedMessage> {
-    let rest = line.trim_start().strip_prefix(MESSAGE_PREFIX)?;
-    let (header_rest, body) = rest.split_once("] ")?;
-    let (sender, recipient) = header_rest.split_once(" >>> ")?;
-    let sender = sender.trim();
-    let recipient = recipient.trim();
-    if sender.is_empty() || recipient.is_empty() {
-        return None;
-    }
-    Some(ParsedMessage {
-        sender: sender.to_string(),
-        recipient: recipient.to_string(),
-        body: body.to_string(),
-    })
-}
-
-fn find_last_bridge_message(text: &str) -> Option<ParsedMessage> {
-    text.lines().rev().find_map(parse_bridge_message)
-}
-
-fn slice_since_last_message(text: &str) -> &str {
-    let mut cursor = 0;
-    let mut last_end = None;
-    for line in text.split_inclusive('\n') {
-        let line_no_newline = line.strip_suffix('\n').unwrap_or(line);
-        if parse_bridge_message(line_no_newline).is_some() {
-            last_end = Some(cursor + line.len());
-        }
-        cursor += line.len();
-    }
-    match last_end {
-        Some(end) if end <= text.len() => &text[end..],
-        _ => text,
-    }
-}
-
-fn format_bridge_message(sender: &str, recipient: &str, body: &str) -> String {
-    format!("[ghostty-bridge:{} >>> {}] {}", sender, recipient, body)
-}
-
-fn ensure_single_line_body(body: &str) -> Result<(), String> {
-    if body.contains('\n') || body.contains('\r') {
-        Err("bridge message body must be a single line (no newlines)".to_string())
-    } else {
-        Ok(())
-    }
-}
-
 #[derive(Serialize)]
 struct ListEntry<'a> {
     id: &'a str,
@@ -831,63 +762,15 @@ fn main() {
             );
         }
 
-        Commands::Message { target, text } => {
-            ensure_single_line_body(&text).unwrap_or_else(exit_with_error);
-            let id = resolve_terminal_target(&target).unwrap_or_else(exit_with_error);
-            let sender = applescript::find_current_terminal_id().unwrap_or_else(|| {
-                exit_with_error(
-                    "Could not identify current Ghostty terminal; \
-                     'message' must run inside Ghostty so replies can route back",
-                )
-            });
-            let msg = format_bridge_message(&sender, &target, &text);
-            ensure_ok(
-                applescript::input_text(&id, &msg),
-                format!("Failed to send message to terminal {}", id),
-            );
-            ensure_ok(
-                applescript::send_key(&id, "enter"),
-                format!("Failed to send Enter to terminal {}", id),
-            );
-        }
-
-        Commands::Reply { text, lines } => {
-            ensure_single_line_body(&text).unwrap_or_else(exit_with_error);
-            let current_id = applescript::find_current_terminal_id()
-                .unwrap_or_else(|| exit_with_error("Could not identify current Ghostty terminal"));
-            let output = applescript::read_terminal(&current_id, lines).unwrap_or_else(|e| {
-                exit_with_error(format!("Failed to read terminal {}: {}", current_id, e))
-            });
-            let message = find_last_bridge_message(&output).unwrap_or_else(|| {
-                exit_with_error("No ghostty-bridge message found in current terminal")
-            });
-            let target_id =
-                resolve_terminal_target(&message.sender).unwrap_or_else(exit_with_error);
-            let reply = format_bridge_message(&current_id, &message.sender, &text);
-            ensure_ok(
-                applescript::input_text(&target_id, &reply),
-                format!("Failed to send reply to terminal {}", target_id),
-            );
-            ensure_ok(
-                applescript::send_key(&target_id, "enter"),
-                format!("Failed to send Enter to terminal {}", target_id),
-            );
-        }
-
         Commands::Read {
             target,
             lines,
-            since_last_message,
         } => {
             let id = resolve_terminal_target(&target).unwrap_or_else(exit_with_error);
             let output = applescript::read_terminal(&id, lines).unwrap_or_else(|e| {
                 exit_with_error(format!("Failed to read terminal {}: {}", id, e))
             });
-            if since_last_message {
-                print!("{}", slice_since_last_message(&output));
-            } else {
-                print!("{}", output);
-            }
+            print!("{}", output);
         }
 
         Commands::Keys { target, keys } => {
@@ -1122,87 +1005,6 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parses_well_formed_message() {
-        let parsed =
-            parse_bridge_message("[ghostty-bridge:AAA >>> BBB] hello world").expect("should parse");
-        assert_eq!(parsed.sender, "AAA");
-        assert_eq!(parsed.recipient, "BBB");
-        assert_eq!(parsed.body, "hello world");
-    }
-
-    #[test]
-    fn parser_preserves_inner_brackets_and_arrows() {
-        let parsed =
-            parse_bridge_message("[ghostty-bridge:claude >>> codex] reply [1]: a >>> b").unwrap();
-        assert_eq!(parsed.sender, "claude");
-        assert_eq!(parsed.recipient, "codex");
-        assert_eq!(parsed.body, "reply [1]: a >>> b");
-    }
-
-    #[test]
-    fn parser_rejects_unrelated_lines() {
-        assert!(parse_bridge_message("$ echo hi").is_none());
-        assert!(parse_bridge_message("[ghostty-bridge-x: a >>> b] y").is_none());
-        assert!(parse_bridge_message("[ghostty-bridge: >>> codex] missing sender").is_none());
-        assert!(parse_bridge_message("[ghostty-bridge:claude] missing recipient").is_none());
-    }
-
-    #[test]
-    fn find_last_bridge_message_picks_the_most_recent() {
-        let transcript = "\
-boot log
-[ghostty-bridge:claude >>> codex] first
-random output
-[ghostty-bridge:gemini >>> claude] second
-tail
-";
-        let parsed = find_last_bridge_message(transcript).unwrap();
-        assert_eq!(parsed.sender, "gemini");
-        assert_eq!(parsed.recipient, "claude");
-        assert_eq!(parsed.body, "second");
-    }
-
-    #[test]
-    fn find_last_returns_none_when_absent() {
-        let transcript = "boot\nother output\n";
-        assert!(find_last_bridge_message(transcript).is_none());
-    }
-
-    #[test]
-    fn slice_since_last_message_returns_trailing_output() {
-        let transcript = "\
-[ghostty-bridge:claude >>> codex] hi
-running command
-done
-";
-        assert_eq!(
-            slice_since_last_message(transcript),
-            "running command\ndone\n"
-        );
-    }
-
-    #[test]
-    fn slice_since_last_message_returns_empty_when_message_is_last_line() {
-        let transcript = "prelude\n[ghostty-bridge:claude >>> codex] ping\n";
-        assert_eq!(slice_since_last_message(transcript), "");
-    }
-
-    #[test]
-    fn slice_since_last_message_returns_full_when_no_message() {
-        let transcript = "just terminal output\nwith no framing\n";
-        assert_eq!(slice_since_last_message(transcript), transcript);
-    }
-
-    #[test]
-    fn format_bridge_message_roundtrips_through_parser() {
-        let line = format_bridge_message("claude", "codex", "please review auth.ts");
-        let parsed = parse_bridge_message(&line).unwrap();
-        assert_eq!(parsed.sender, "claude");
-        assert_eq!(parsed.recipient, "codex");
-        assert_eq!(parsed.body, "please review auth.ts");
-    }
 
     #[test]
     fn list_entries_attach_labels_by_id() {

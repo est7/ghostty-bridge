@@ -9,8 +9,23 @@ A CLI that bridges AI agents to Ghostty terminal panes via AppleScript. Send tex
 
 ## Install
 
+Homebrew is the supported install path:
+
 ```sh
-cargo install ghostty-bridge
+brew install est7/tap/ghostty-bridge
+```
+
+If you already tapped the repository, the equivalent two-step install is:
+
+```sh
+brew tap est7/tap
+brew install ghostty-bridge
+```
+
+To build from source instead:
+
+```sh
+cargo install --git https://github.com/est7/ghostty-bridge
 ```
 
 ## Commands

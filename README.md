@@ -46,6 +46,7 @@ cargo install --git https://github.com/est7/ghostty-bridge
 | `ghostty-bridge close <target>` | Close a terminal, selected tab, or front window |
 | `ghostty-bridge name <target> <label>` | Label a terminal for easy reference |
 | `ghostty-bridge resolve <label>` | Resolve a label to a terminal UUID |
+| `ghostty-bridge find [--cwd <p>] [--label <n>] [--tty <p>] [--all]` | Find terminal(s) by one or more filters. Prints UUID(s); exit 0/1/2 for unique/none/multiple |
 | `ghostty-bridge id` | Print this terminal's Ghostty ID |
 | `ghostty-bridge tty` | Print this terminal's TTY device path |
 | `ghostty-bridge doctor` | Diagnose Ghostty connectivity |

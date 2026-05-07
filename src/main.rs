@@ -88,6 +88,41 @@ enum Commands {
         label: String,
     },
 
+    #[command(
+        about = "Find terminal(s) matching one or more filters",
+        after_help = r#"Filters (combined with AND; at least one is required):
+  --cwd <path>     Match terminals whose cwd equals <path> exactly
+  --label <name>   Match terminals carrying this label
+  --tty <path>     Match terminals on this TTY device (e.g. /dev/ttys003)
+
+Output:
+  stdout — one UUID per line
+  stderr — diagnostics and (on multiple match) candidate listing
+
+Exit codes:
+  0  exactly one match (or --all with at least one match)
+  1  no match
+  2  multiple matches without --all, or no filter given
+
+Examples:
+  ghostty-bridge find --label codex
+  ghostty-bridge find --cwd "$(pwd)" --label codex
+  ghostty-bridge find --label codex --all"#
+    )]
+    Find {
+        #[arg(long, help = "Match this current working directory exactly")]
+        cwd: Option<String>,
+        #[arg(long, help = "Match this label")]
+        label: Option<String>,
+        #[arg(long, help = "Match this TTY device path (e.g. /dev/ttys003)")]
+        tty: Option<String>,
+        #[arg(
+            long,
+            help = "Print every match instead of requiring a unique result"
+        )]
+        all: bool,
+    },
+
     #[command(about = "Print this terminal's Ghostty id")]
     Id,
 
@@ -862,6 +897,72 @@ fn main() {
             Some(id) => println!("{}", id),
             None => exit_with_error(format!("No terminal labeled '{}'", label)),
         },
+
+        Commands::Find {
+            cwd,
+            label,
+            tty,
+            all,
+        } => {
+            if cwd.is_none() && label.is_none() && tty.is_none() {
+                eprintln!(
+                    "error: at least one filter is required (--cwd, --label, --tty)"
+                );
+                process::exit(2);
+            }
+
+            let terminals = applescript::list_terminals();
+            let store = labels::load();
+            let entries = build_list_entries(&terminals, &store);
+
+            let matches: Vec<&ListEntry> = entries
+                .iter()
+                .filter(|e| {
+                    if let Some(c) = &cwd {
+                        if e.cwd != c {
+                            return false;
+                        }
+                    }
+                    if let Some(l) = &label {
+                        if e.label != Some(l.as_str()) {
+                            return false;
+                        }
+                    }
+                    if let Some(t) = &tty {
+                        if e.tty != t {
+                            return false;
+                        }
+                    }
+                    true
+                })
+                .collect();
+
+            match (matches.len(), all) {
+                (0, _) => {
+                    eprintln!("error: no terminal matches the given filters");
+                    process::exit(1);
+                }
+                (1, _) => {
+                    println!("{}", matches[0].id);
+                }
+                (_, true) => {
+                    for m in &matches {
+                        println!("{}", m.id);
+                    }
+                }
+                (n, false) => {
+                    eprintln!(
+                        "error: {} terminals match the given filters; pass --all or refine filters",
+                        n
+                    );
+                    for m in &matches {
+                        let lbl = m.label.unwrap_or("-");
+                        eprintln!("  {}  cwd={}  label={}", m.id, m.cwd, lbl);
+                    }
+                    process::exit(2);
+                }
+            }
+        }
 
         Commands::Tty => match applescript::current_tty() {
             Some(tty) => println!("{}", tty),
